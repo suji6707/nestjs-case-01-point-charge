@@ -1,0 +1,10 @@
+{
+    "editor.formatOnSave": false,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": "explicit"
+    },
+    "prettier.tabWidth": 4,
+    "editor.tabSize": 4,
+    "editor.detectIndentation": true,
+    "editor.insertSpaces": true
+}
