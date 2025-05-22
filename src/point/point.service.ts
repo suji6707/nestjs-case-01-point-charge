@@ -28,19 +28,24 @@ export class PointService {
 	 * 1. if lock already released, do nothing
 	 * 2. release lock and wake up waitQueue callback in FIFO.
 	 */
+
+	// callback: 어떤 함수를 원하는 타이밍에 실행시키는 방법.
+	private releaseFn(userId: number): () => void {
+		return () => {
+			if (!this.acquiredLocks.has(userId)) {
+				return;
+			}
+			this.acquiredLocks.delete(userId);
+			this._processNextInQueue(userId);
+		};
+	}
+
 	private acquire(userId: number): Promise<() => void> {
 		return new Promise((resolve) => {
-			const queue = this.waitQueues.get(userId) || [];
+			const queue = this.waitQueues.get(userId) ?? [];
 			if (!this.acquiredLocks.has(userId) && queue.length === 0) {
 				this.acquiredLocks.add(userId);
-				const release = () => {
-					if (!this.acquiredLocks.has(userId)) {
-						return;
-					}
-					this.acquiredLocks.delete(userId);
-					this._processNextInQueue(userId, queue);
-				};
-				return resolve(release);
+				return resolve(this.releaseFn(userId));
 			} else {
 				queue.push(resolve);
 				this.waitQueues.set(userId, queue);
@@ -48,26 +53,12 @@ export class PointService {
 		});
 	}
 
-	private _processNextInQueue(
-		userId: number,
-		queue: Array<(releaseFn: () => void) => void>,
-	): void {
-		if (queue.length > 0) {
-			const nextResolver = queue.shift();
-			if (nextResolver) {
-				this.acquiredLocks.add(userId);
-				const releaseForNext = () => {
-					if (!this.acquiredLocks.has(userId)) {
-						return;
-					}
-					this.acquiredLocks.delete(userId);
-					this._processNextInQueue(userId, queue);
-				};
-				nextResolver(releaseForNext);
-			}
-			if (queue.length === 0) {
-				this.waitQueues.delete(userId);
-			}
+	private _processNextInQueue(userId: number): void {
+		const queue = this.waitQueues.get(userId) ?? [];
+		const nextResolver = queue.shift();
+		if (nextResolver) {
+			this.acquiredLocks.add(userId);
+			nextResolver(this.releaseFn(userId));
 		}
 	}
 
