@@ -7,7 +7,11 @@ export const MAX_POINT = 10000000;
 
 @Injectable()
 export class PointService {
-	private readonly lock = new Map<number, boolean>();
+	private readonly acquiredLocks = new Set<number>();
+	private readonly waitQueues = new Map<
+		number,
+		Array<(releaseFn: () => void) => void>
+	>();
 
 	constructor(
 		private readonly userPointRepository: UserPointTable,
@@ -15,14 +19,56 @@ export class PointService {
 	) {}
 
 	// Exclusive lock (should not read userPoint during charge)
-	private async acquire(userId: number): Promise<() => void> {
-		while (this.lock.has(userId)) {
-			// setTimeout 완료시까지 다른 작업 수행 가능
-			await new Promise((resolve) => setTimeout(resolve, 100));
+	/**
+	 * 락 획득 조건:
+	 * 1. no one using the lock
+	 * 2. no one waiting for the lock
+	 *
+	 * 락 해제:
+	 * 1. if lock already released, do nothing
+	 * 2. release lock and wake up waitQueue callback in FIFO.
+	 */
+	private acquire(userId: number): Promise<() => void> {
+		return new Promise((resolve) => {
+			const queue = this.waitQueues.get(userId) || [];
+			if (!this.acquiredLocks.has(userId) && queue.length === 0) {
+				this.acquiredLocks.add(userId);
+				const release = () => {
+					if (!this.acquiredLocks.has(userId)) {
+						return;
+					}
+					this.acquiredLocks.delete(userId);
+					this._processNextInQueue(userId, queue);
+				};
+				return resolve(release);
+			} else {
+				queue.push(resolve);
+				this.waitQueues.set(userId, queue);
+			}
+		});
+	}
+
+	private _processNextInQueue(
+		userId: number,
+		queue: Array<(releaseFn: () => void) => void>,
+	): void {
+		if (queue.length > 0) {
+			const nextResolver = queue.shift();
+			if (nextResolver) {
+				this.acquiredLocks.add(userId);
+				const releaseForNext = () => {
+					if (!this.acquiredLocks.has(userId)) {
+						return;
+					}
+					this.acquiredLocks.delete(userId);
+					this._processNextInQueue(userId, queue);
+				};
+				nextResolver(releaseForNext);
+			}
+			if (queue.length === 0) {
+				this.waitQueues.delete(userId);
+			}
 		}
-		this.lock.set(userId, true);
-		const release = () => this.lock.delete(userId);
-		return release;
 	}
 
 	// 포인트 조회
